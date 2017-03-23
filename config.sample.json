@@ -1,0 +1,15 @@
+{
+  "filter": "^(Table|Threads|Qcache|Prepared|Connections|Created|Open)",
+  "hosts": [
+    {
+      "name": "local",
+      "dsn": "root:super-secret@tcp(localhost:3306)/information_schema"
+    }
+  ],
+  "influx": {
+    "interval": "3s",
+    "hostname": "localhost",
+    "database": "mysql_runtime"
+  },
+  "interval": "1s"
+}
