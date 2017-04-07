@@ -6,6 +6,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	influx "github.com/influxdata/influxdb/client/v2"
 	"github.com/jmoiron/sqlx"
+	"github.com/jpicht/mysql-influxdb/influxsender"
 	"io/ioutil"
 	"os"
 	"os/signal"
@@ -19,18 +20,13 @@ type (
 	Config struct {
 		Interval time.Duration
 		Filter   string
-		Influx   Influx
+		Influx   influxsender.Config
 		Hosts    []Host
 	}
 	Host struct {
 		Name string
 		DSN  string
 		Tags map[string]string
-	}
-	Influx struct {
-		Interval time.Duration
-		Hostname string
-		Database string
 	}
 	Line struct {
 		Name  string `db:"Variable_name"`
@@ -40,12 +36,6 @@ type (
 		Name       string
 		Connection *sqlx.DB
 		Tags       map[string]string
-	}
-
-	InfluxSender struct {
-		lock   sync.Mutex
-		data   influx.BatchPoints
-		client influx.Client
 	}
 )
 
@@ -62,59 +52,11 @@ func failOnError(err error, f string, data ...interface{}) {
 	os.Exit(1)
 }
 
-func newSender(c Influx) *InfluxSender {
-	batchPoints, err := influx.NewBatchPoints(influx.BatchPointsConfig{
-		Database: c.Database,
-	})
-	failOnError(err, "Cannot create influx batch: %s", err)
-
-	sender, err := influx.NewHTTPClient(influx.HTTPConfig{
-		Addr:    "http://" + c.Hostname + ":8086",
-		Timeout: 5 * time.Second,
-	})
-	failOnError(err, "Cannot create influxdb output: %s", err)
-
-	sender.Query(influx.NewQuery(
-		"CREATE DATABASE "+c.Database,
-		"",
-		"",
-	))
-
-	return &InfluxSender{
-		lock:   sync.Mutex{},
-		data:   batchPoints,
-		client: sender,
-	}
-}
-
-func (s *InfluxSender) AddPoint(point *influx.Point) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	s.data.AddPoint(point)
-}
-
-func (s *InfluxSender) Send() {
-	defer s.lock.Unlock()
-	s.lock.Lock()
-	batchPoints, err := influx.NewBatchPoints(influx.BatchPointsConfig{
-		Database: s.data.Database(),
-	})
-	failOnError(err, "Cannot create influx batch: %s", err)
-
-	data := s.data
-	s.data = batchPoints
-
-	go func () {
-		err := s.client.Write(data)
-		fmt.Printf("sent: %d %s\n", len(data.Points()), err)
-	}()
-}
-
 func (c *Config) UnmarshalJSON(data []byte) error {
 	var temp struct {
 		Interval string
 		Filter   string
-		Influx   Influx
+		Influx   influxsender.Config
 		Hosts    []Host
 	}
 	err := json.Unmarshal(data, &temp)
@@ -132,30 +74,6 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (i* Influx) UnmarshalJSON(data []byte) error {
-	var temp struct {
-		Interval string
-		Hostname string
-		Database string
-	}
-	err := json.Unmarshal(data, &temp)
-	if err != nil {
-		return err
-	}
-	i.Hostname = temp.Hostname
-	i.Database = temp.Database
-	tmp_duration, err := time.ParseDuration(temp.Interval)
-	if err != nil {
-		return err
-	}
-	i.Interval = tmp_duration
-	return nil
-}
-
-func (i *Influx) MarshalJSON() ([]byte, error) {
-	return []byte{}, nil
-}
-
 func main() {
 	if len(os.Args) != 2 {
 		fail("Please specify config file")
@@ -169,7 +87,7 @@ func main() {
 
 	var interval = c.Interval
 
-	if interval < 1 * time.Second{
+	if interval < 1*time.Second {
 		interval = 1 * time.Second
 	}
 
@@ -197,7 +115,8 @@ func main() {
 		}
 	}
 
-	sender := newSender(c.Influx)
+	sender, err := influxsender.NewSender(c.Influx)
+	failOnError(err, "Error: %s", err)
 
 	tick := time.NewTicker(interval)
 	sendTick := time.NewTicker(c.Influx.Interval)
@@ -244,6 +163,8 @@ func main() {
 			go sender.Send()
 		case <-signals:
 			tick.Stop()
+			sendTick.Stop()
+			sender.Send()
 			return
 		}
 	}
