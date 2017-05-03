@@ -1,7 +1,6 @@
 package influxsender
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -152,7 +151,6 @@ func (s *influxSender) send(lock bool) {
 	exception.ThrowOnError(err, errors.Wrap(err, "Cannot create influx batch"))
 
 	data := s.data
-	fmt.Printf("Queue %d\n", len(data.Points()))
 	s.data = batchPoints
 	if lock {
 		s.lock.Unlock()
@@ -180,7 +178,6 @@ func (s *influxSender) worker() {
 	}
 
 	for batch := range s.c {
-		fmt.Printf("Send %d\n", len(batch.Points()))
 		sender.Write(batch)
 	}
 }
