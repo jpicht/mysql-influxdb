@@ -165,18 +165,7 @@ func globalStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *Ru
 			values[v.Name], _ = strconv.Atoi(v.Value)
 		}
 
-		p, err := influx.NewPoint(
-			"mysql",
-			info.Tags,
-			values,
-			now,
-		)
-
-		if err == nil {
-			sender.AddPoint(p)
-		} else {
-			log.WithData("error", err).Warning("Error creating point")
-		}
+		send(log, now, sender, "mysql", info.Tags, values)
 	}).CatchAll(func(interface{}) {
 		atomic.AddInt32(failed, 1)
 	}).Go()
@@ -220,22 +209,22 @@ func procList(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *Runnin
 		}
 
 		for _, tmpP := range tmp {
-			p, err := influx.NewPoint(
-				"threads",
-				tmpP.tags,
-				tmpP.values,
-				now,
-			)
-
-			if err == nil {
-				sender.AddPoint(p)
-			} else {
-				log.WithData("error", err).Warning("Error creating point")
-			}
+			send(log, now, sender, "threads", tmpP.tags, tmpP.values)
 		}
 	}).CatchAll(func(interface{}) {
 		atomic.AddInt32(failed, 1)
 	}).Go()
+}
+
+func tags(base map[string]string, additional map[string]string) map[string]string {
+	out := make(map[string]string, len(base)+len(additional))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range additional {
+		out[k] = v
+	}
+	return out
 }
 
 func main() {
@@ -279,7 +268,7 @@ func main() {
 		}
 	}
 
-	sender, err := influxsender.NewSender(c.Influx)
+	sender, err := influxsender.NewSender(&c.Influx)
 	failOnError(err, "Error: %s", err)
 
 	tick := time.NewTicker(interval)
@@ -292,7 +281,7 @@ func main() {
 		case <-tick.C:
 			failed := int32(0)
 			wg := sync.WaitGroup{}
-			wg.Add(2 * len(cons))
+			wg.Add(3 * len(cons))
 
 			for i := range cons {
 				now := time.Now()
@@ -301,6 +290,7 @@ func main() {
 
 				globalStatus(now, &wg, locallog, info, filter, sender, &failed)
 				procList(now, &wg, locallog, info, sender, &failed)
+				innoStatus(now, &wg, locallog, info, sender, &failed)
 			}
 			// synchronous at the moment, but whatever
 			wg.Wait()

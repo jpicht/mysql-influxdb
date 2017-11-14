@@ -45,11 +45,13 @@ func (i *Config) UnmarshalJSON(data []byte) error {
 	}
 	i.Url = temp.Url
 	i.Database = temp.Database
-	tmp_duration, err := time.ParseDuration(temp.Interval)
-	if err != nil {
-		return err
+	if len(temp.Interval) > 0 {
+		tmp_duration, err := time.ParseDuration(temp.Interval)
+		if err != nil {
+			return err
+		}
+		i.Interval = tmp_duration
 	}
-	i.Interval = tmp_duration
 	return nil
 }
 
@@ -57,7 +59,7 @@ func (i *Config) MarshalJSON() ([]byte, error) {
 	return []byte{}, nil
 }
 
-func NewSender(c Config) (InfluxSender, error) {
+func NewSender(c *Config) (InfluxSender, error) {
 	batchPoints, err := influx.NewBatchPoints(influx.BatchPointsConfig{
 		Database: c.Database,
 	})
@@ -90,7 +92,7 @@ func NewSender(c Config) (InfluxSender, error) {
 	}
 
 	s := &influxSender{
-		config:     c,
+		config:     *c,
 		lock:       sync.Mutex{},
 		data:       batchPoints,
 		sendWorker: &sync.WaitGroup{},
