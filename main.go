@@ -281,7 +281,7 @@ func main() {
 		case <-tick.C:
 			failed := int32(0)
 			wg := sync.WaitGroup{}
-			wg.Add(3 * len(cons))
+			wg.Add(4 * len(cons))
 
 			for i := range cons {
 				now := time.Now()
@@ -291,6 +291,7 @@ func main() {
 				globalStatus(now, &wg, locallog, info, filter, sender, &failed)
 				procList(now, &wg, locallog, info, sender, &failed)
 				innoStatus(now, &wg, locallog, info, sender, &failed)
+				masterStatus(now, &wg, locallog, info, sender, &failed)
 			}
 			// synchronous at the moment, but whatever
 			wg.Wait()
