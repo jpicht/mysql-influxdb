@@ -14,7 +14,7 @@ import (
 	"github.com/jpicht/mysql-influxdb/influxsender"
 )
 
-func masterStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
+func (a*app)  masterStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
 	defer wg.Done()
 	exception.Try(func() {
 		type helper struct {
@@ -47,7 +47,7 @@ func masterStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *Ru
 			return
 		}
 		position := int64(fileNum)*max.BinlogSize + data.Position
-		send(log, now, sender, "replication", info.Tags, map[string]interface{}{
+		a.send(log, now, sender, "replication", info.Tags, map[string]interface{}{
 			"master_position": position,
 		})
 	}).CatchAll(func(i interface{}) {

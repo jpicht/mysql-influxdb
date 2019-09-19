@@ -63,6 +63,8 @@ type (
 		tags   map[string]string
 		values map[string]interface{}
 	}
+	app struct {
+	}
 )
 
 func fail(f string, data ...interface{}) {
@@ -130,7 +132,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func send(log logger.Logger, now time.Time, sender influxsender.InfluxSender, measurement string, tags map[string]string, values map[string]interface{}) {
+func (a *app) send(log logger.Logger, now time.Time, sender influxsender.InfluxSender, measurement string, tags map[string]string, values map[string]interface{}) {
 	p, err := influx.NewPoint(
 		measurement,
 		tags,
@@ -145,7 +147,7 @@ func send(log logger.Logger, now time.Time, sender influxsender.InfluxSender, me
 	}
 }
 
-func globalStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, filter *regexp.Regexp, sender influxsender.InfluxSender, failed *int32) {
+func (a *app) globalStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, filter *regexp.Regexp, sender influxsender.InfluxSender, failed *int32) {
 	defer wg.Done()
 	exception.Try(func() {
 		rows := make([]Line, 0)
@@ -167,13 +169,13 @@ func globalStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *Ru
 			values[v.Name], _ = strconv.Atoi(v.Value)
 		}
 
-		send(log, now, sender, "mysql", info.Tags, values)
+		a.send(log, now, sender, "mysql", info.Tags, values)
 	}).CatchAll(func(interface{}) {
 		atomic.AddInt32(failed, 1)
 	}).Go()
 }
 
-func procList(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
+func (a *app) procList(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
 	defer wg.Done()
 	exception.Try(func() {
 		rows := make([]ProcesslistAbbrevLine, 0)
@@ -212,7 +214,7 @@ func procList(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *Runnin
 		}
 
 		for _, tmpP := range tmp {
-			send(log, now, sender, "threads", tmpP.tags, tmpP.values)
+			a.send(log, now, sender, "threads", tmpP.tags, tmpP.values)
 		}
 	}).CatchAll(func(interface{}) {
 		atomic.AddInt32(failed, 1)
@@ -230,7 +232,7 @@ func tags(base map[string]string, additional map[string]string) map[string]strin
 	return out
 }
 
-func main() {
+func (a *app) main() {
 	if len(os.Args) != 2 {
 		fail("Please specify config file")
 	}
@@ -291,10 +293,10 @@ func main() {
 				info := &(cons[i])
 				locallog := log.WithData("server", info.Name)
 
-				globalStatus(now, &wg, locallog, info, filter, sender, &failed)
-				procList(now, &wg, locallog, info, sender, &failed)
-				innoStatus(now, &wg, locallog, info, sender, &failed)
-				masterStatus(now, &wg, locallog, info, sender, &failed)
+				a.globalStatus(now, &wg, locallog, info, filter, sender, &failed)
+				a.procList(now, &wg, locallog, info, sender, &failed)
+				a.innoStatus(now, &wg, locallog, info, sender, &failed)
+				a.masterStatus(now, &wg, locallog, info, sender, &failed)
 			}
 			// synchronous at the moment, but whatever
 			wg.Wait()
@@ -322,4 +324,9 @@ func main() {
 			return
 		}
 	}
+}
+
+func main() {
+	a := &app{}
+	a.main()
 }
