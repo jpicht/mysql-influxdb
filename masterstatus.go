@@ -9,10 +9,9 @@ import (
 
 	"github.com/ftloc/exception"
 	"github.com/jpicht/logger"
-	"github.com/jpicht/mysql-influxdb/influxsender"
 )
 
-func (a *app) masterStatus(log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
+func (a *app) masterStatus(log logger.Logger, info *RunningHostInfo, failed *int32) {
 	defer a.wg.Done()
 	exception.Try(func() {
 		type helper struct {
@@ -45,7 +44,7 @@ func (a *app) masterStatus(log logger.Logger, info *RunningHostInfo, sender infl
 			return
 		}
 		position := int64(fileNum)*max.BinlogSize + data.Position
-		a.send(log, sender, "replication", info.Tags, map[string]interface{}{
+		a.send(log, "replication", info.Tags, map[string]interface{}{
 			"master_position": position,
 		})
 	}).CatchAll(func(i interface{}) {
