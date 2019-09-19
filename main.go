@@ -99,20 +99,6 @@ func newTmpPointProcList(tags map[string]string, user string, command string, db
 	}
 }
 
-func newTmpPoint(tags map[string]string, additional map[string]string, values map[string]interface{}) *TmpPoint {
-	copy := make(map[string]string)
-	for k, v := range tags {
-		copy[k] = v
-	}
-	for k, v := range additional {
-		copy[k] = v
-	}
-	return &TmpPoint{
-		tags:   copy,
-		values: values,
-	}
-}
-
 func (c *Config) UnmarshalJSON(data []byte) error {
 	var temp struct {
 		Interval string
@@ -307,7 +293,7 @@ func (a *app) main() {
 
 			if failed > 0 {
 				failCount++
-				log.Warningf("Some items failed (%d/%d items, %d consecutive rounds)", failed, len(cons)*3, failCount)
+				log.Warningf("Some items failed (%d/%d items, %d consecutive rounds)", failed, len(cons)*4, failCount)
 				if failCount > 10 {
 					time.Sleep(60 * time.Second)
 				} else if failCount > 5 {
