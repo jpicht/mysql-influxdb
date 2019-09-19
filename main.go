@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"regexp"
@@ -22,12 +20,6 @@ import (
 )
 
 type (
-	Config struct {
-		Interval time.Duration
-		Filter   string
-		Influx   influxsender.Config
-		Hosts    []Host
-	}
 	Host struct {
 		Name string
 		DSN  string
@@ -78,28 +70,6 @@ func failOnError(err error, f string, data ...interface{}) {
 	}
 	fmt.Fprintf(os.Stderr, f+"\n", data...)
 	os.Exit(1)
-}
-
-func (c *Config) UnmarshalJSON(data []byte) error {
-	var temp struct {
-		Interval string
-		Filter   string
-		Influx   influxsender.Config
-		Hosts    []Host
-	}
-	err := json.Unmarshal(data, &temp)
-	if err != nil {
-		return err
-	}
-	c.Filter = temp.Filter
-	c.Influx = temp.Influx
-	c.Hosts = temp.Hosts
-	tmp_duration, err := time.ParseDuration(temp.Interval)
-	if err != nil {
-		return err
-	}
-	c.Interval = tmp_duration
-	return nil
 }
 
 func (a *app) send(log logger.Logger, measurement string, tags map[string]string, values map[string]interface{}) {
@@ -207,11 +177,7 @@ func (a *app) main() {
 		fail("Please specify config file")
 	}
 
-	c := &Config{}
-	d, err := ioutil.ReadFile(os.Args[1])
-	failOnError(err, "Cannot read config file: %s", err)
-	err = json.Unmarshal(d, c)
-	failOnError(err, "Cannot parse config file: %s", err)
+	c := loadConfigFile(os.Args[1])
 
 	var interval = c.Interval
 
