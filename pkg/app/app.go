@@ -1,20 +1,17 @@
-package main
+package app
 
 import (
 	"os"
 	"os/signal"
 	"regexp"
-	"strconv"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/ftloc/exception"
+	"github.com/sirupsen/logrus"
+
 	_ "github.com/go-sql-driver/mysql"
 	influx "github.com/influxdata/influxdb/client/v2"
 	"github.com/jmoiron/sqlx"
-	"github.com/jpicht/logger"
 	"github.com/jpicht/mysql-influxdb/influxsender"
 )
 
@@ -50,15 +47,16 @@ type (
 		Connection *sqlx.DB
 		Tags       map[string]string
 	}
-	app struct {
+	App struct {
 		now         time.Time
 		wg          *sync.WaitGroup
 		sender      influxsender.InfluxSender
 		currentHost *RunningHostInfo
+		log         logrus.FieldLogger
 	}
 )
 
-func (a *app) send(log logger.Logger, measurement string, tags map[string]string, values map[string]interface{}) {
+func (a *App) send(measurement string, tags map[string]string, values map[string]interface{}) error {
 	p, err := influx.NewPoint(
 		measurement,
 		tags,
@@ -68,86 +66,12 @@ func (a *app) send(log logger.Logger, measurement string, tags map[string]string
 
 	if err == nil {
 		a.sender.AddPoint(p)
-	} else {
-		log.WithData("error", err).Warning("Error creating point")
 	}
+
+	return err
 }
 
-func (a *app) globalStatus(log logger.Logger, filter *regexp.Regexp, failed *int32) {
-	defer a.wg.Done()
-	exception.Try(func() {
-		rows := make([]Line, 0)
-		err := a.currentHost.Connection.Select(&rows, "SHOW GLOBAL STATUS")
-		if err != nil {
-			log.WithData("error", err).Warning("MySQL-Query-Error")
-			return
-		}
-
-		values := map[string]interface{}{}
-
-		for ii := range rows {
-			v := rows[ii]
-
-			if !filter.MatchString(v.Name) {
-				continue
-			}
-
-			values[v.Name], _ = strconv.Atoi(v.Value)
-		}
-
-		a.send(log, "mysql", a.currentHost.Tags, values)
-	}).CatchAll(func(interface{}) {
-		atomic.AddInt32(failed, 1)
-	}).Go()
-}
-
-func (a *app) procList(log logger.Logger, failed *int32) {
-	defer a.wg.Done()
-	exception.Try(func() {
-		rows := make([]ProcesslistAbbrevLine, 0)
-		err := a.currentHost.Connection.Select(
-			&rows,
-			"SELECT "+
-				"IFNULL(USER, '') USER, "+
-				"IFNULL(COMMAND, '') COMMAND, "+
-				"IFNULL(DB, '') DB, "+
-				"SUBSTRING_INDEX(HOST, ':', 1) AS REMOTE, "+
-				"IFNULL(STATE, '') STATE, "+
-				"COUNT(*) AS `COUNT` "+
-				"FROM PROCESSLIST "+
-				"WHERE USER NOT IN ('system user', 'repl') "+
-				"GROUP BY COMMAND, DB, REMOTE, STATE;",
-		)
-		if err != nil {
-			log.WithData("error", err).Warning("MySQL-Query-Error")
-			return
-		}
-
-		tmp := map[string]*TmpPoint{}
-
-		for _, row := range rows {
-			state := strings.Replace(row.State, " ", "_", -1)
-			if state == "" {
-				state = row.Command
-			}
-
-			key := row.User + row.Command + row.Database + row.Host + row.State
-			if _, ok := tmp[key]; !ok {
-				tmp[key] = newTmpPointProcList(a.currentHost.Tags, row.User, row.Command, row.Database, row.Host, state)
-			}
-
-			tmp[key].values["threads"] = row.Count
-		}
-
-		for _, tmpP := range tmp {
-			a.send(log, "threads", tmpP.tags, tmpP.values)
-		}
-	}).CatchAll(func(interface{}) {
-		atomic.AddInt32(failed, 1)
-	}).Go()
-}
-
-func (a *app) main() {
+func (a *App) Main() {
 	if len(os.Args) != 2 {
 		fail("Please specify config file")
 	}
@@ -190,7 +114,7 @@ func (a *app) main() {
 
 	tick := time.NewTicker(interval)
 	sendTick := time.NewTicker(c.Influx.Interval)
-	log := logger.NewStdoutLogger()
+	log := logrus.StandardLogger()
 
 	a.wg = &sync.WaitGroup{}
 	failCount := 0
@@ -203,12 +127,19 @@ func (a *app) main() {
 			for i := range cons {
 				a.now = time.Now()
 				a.currentHost = &(cons[i])
-				locallog := log.WithData("server", a.currentHost.Name)
+				locallog := log.WithField("server", a.currentHost.Name)
 
-				a.globalStatus(locallog, filter, &failed)
-				a.procList(locallog, &failed)
-				a.innoStatus(locallog, &failed)
-				a.masterStatus(locallog, &failed)
+				for _, fn := range []func() error{
+					func() error { return a.globalStatus(filter) },
+					a.procList,
+					a.innoStatus,
+					a.masterStatus,
+				} {
+					if err := fn(); err != nil {
+						locallog.WithError(err).Warn()
+						failed++
+					}
+				}
 			}
 			// synchronous at the moment, but whatever
 			a.wg.Wait()

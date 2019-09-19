@@ -1,4 +1,4 @@
 .idea
 *.swp
-mysql-influxdb
+/mysql-influxdb
 *.rpm
