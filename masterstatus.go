@@ -5,7 +5,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/ftloc/exception"
@@ -13,8 +12,8 @@ import (
 	"github.com/jpicht/mysql-influxdb/influxsender"
 )
 
-func (a *app) masterStatus(wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
-	defer wg.Done()
+func (a *app) masterStatus(log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
+	defer a.wg.Done()
 	exception.Try(func() {
 		type helper struct {
 			BinlogSize int64 `db:"s"`

@@ -5,7 +5,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/ftloc/exception"
@@ -72,7 +71,7 @@ func (ov outputvalues) get() map[string]interface{} {
 	return ov
 }
 
-func (a *app) innoStatusTransactions(lines []string, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) outputvalues {
+func (a *app) innoStatusTransactions(lines []string, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) outputvalues {
 	transactionsTotal := 0
 	transactionsActive := 0
 	var t *transaction
@@ -143,7 +142,7 @@ func (a *app) innoStatusTransactions(lines []string, wg *sync.WaitGroup, log log
 	}
 }
 
-func (a *app) innoStatusBufferpool(global []string, indiv []string, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) outputvalues {
+func (a *app) innoStatusBufferpool(global []string, indiv []string, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) outputvalues {
 	data := make(outputvalues)
 	if false {
 		for _, line := range global {
@@ -200,8 +199,8 @@ func startsWith(haystack, needle string) bool {
 	return haystack[0:len(needle)] == needle
 }
 
-func (a *app) innoStatus(wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
-	defer wg.Done()
+func (a *app) innoStatus(log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
+	defer a.wg.Done()
 	exception.Try(func() {
 		type InnoStatus struct {
 			Type   string `db:"Type"`
@@ -242,8 +241,8 @@ func (a *app) innoStatus(wg *sync.WaitGroup, log logger.Logger, info *RunningHos
 		}
 
 		values := make(outputvalues)
-		values.merge(a.innoStatusTransactions(blocks["TRANSACTIONS"], wg, log, info, sender, failed))
-		values.merge(a.innoStatusBufferpool(blocks["BUFFER POOL AND MEMORY"], blocks["INDIVIDUAL BUFFER POOL INFO"], wg, log, info, sender, failed))
+		values.merge(a.innoStatusTransactions(blocks["TRANSACTIONS"], log, info, sender, failed))
+		values.merge(a.innoStatusBufferpool(blocks["BUFFER POOL AND MEMORY"], blocks["INDIVIDUAL BUFFER POOL INFO"], log, info, sender, failed))
 		a.send(log, sender, "innodb", info.Tags, values.get())
 	}).CatchAll(func(i interface{}) {
 		log.Alertf("Exception caught: %#v", i)

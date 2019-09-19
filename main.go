@@ -65,6 +65,7 @@ type (
 	}
 	app struct {
 		now time.Time
+		wg  *sync.WaitGroup
 	}
 )
 
@@ -148,8 +149,8 @@ func (a *app) send(log logger.Logger, sender influxsender.InfluxSender, measurem
 	}
 }
 
-func (a *app) globalStatus(wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, filter *regexp.Regexp, sender influxsender.InfluxSender, failed *int32) {
-	defer wg.Done()
+func (a *app) globalStatus(log logger.Logger, info *RunningHostInfo, filter *regexp.Regexp, sender influxsender.InfluxSender, failed *int32) {
+	defer a.wg.Done()
 	exception.Try(func() {
 		rows := make([]Line, 0)
 		err := info.Connection.Select(&rows, "SHOW GLOBAL STATUS")
@@ -176,8 +177,8 @@ func (a *app) globalStatus(wg *sync.WaitGroup, log logger.Logger, info *RunningH
 	}).Go()
 }
 
-func (a *app) procList(wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
-	defer wg.Done()
+func (a *app) procList(log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
+	defer a.wg.Done()
 	exception.Try(func() {
 		rows := make([]ProcesslistAbbrevLine, 0)
 		err := info.Connection.Select(
@@ -281,26 +282,26 @@ func (a *app) main() {
 	sendTick := time.NewTicker(c.Influx.Interval)
 	log := logger.NewStdoutLogger()
 
+	a.wg = &sync.WaitGroup{}
 	failCount := 0
 	for {
 		select {
 		case <-tick.C:
 			failed := int32(0)
-			wg := sync.WaitGroup{}
-			wg.Add(4 * len(cons))
+			a.wg.Add(4 * len(cons))
 
 			for i := range cons {
 				a.now = time.Now()
 				info := &(cons[i])
 				locallog := log.WithData("server", info.Name)
 
-				a.globalStatus(&wg, locallog, info, filter, sender, &failed)
-				a.procList(&wg, locallog, info, sender, &failed)
-				a.innoStatus(&wg, locallog, info, sender, &failed)
-				a.masterStatus(&wg, locallog, info, sender, &failed)
+				a.globalStatus(locallog, info, filter, sender, &failed)
+				a.procList(locallog, info, sender, &failed)
+				a.innoStatus(locallog, info, sender, &failed)
+				a.masterStatus(locallog, info, sender, &failed)
 			}
 			// synchronous at the moment, but whatever
-			wg.Wait()
+			a.wg.Wait()
 
 			if failed > 0 {
 				failCount++
