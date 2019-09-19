@@ -34,9 +34,9 @@ var (
 	reInnoDbGlobalStatusItem = regexp.MustCompile("^([A-Za-z ]+[a-z]) +([0-9]+)$")
 )
 
-func (t *transaction) send(a *app, log logger.Logger, info *RunningHostInfo) {
+func (t *transaction) send(a *app, log logger.Logger) {
 	a.send(log, "transactions", tags(
-		info.Tags,
+		a.currentHost.Tags,
 		map[string]string{
 			"client_host": t.Host,
 			"user":        t.User,
@@ -70,7 +70,7 @@ func (ov outputvalues) get() map[string]interface{} {
 	return ov
 }
 
-func (a *app) innoStatusTransactions(lines []string, log logger.Logger, info *RunningHostInfo, failed *int32) outputvalues {
+func (a *app) innoStatusTransactions(lines []string, log logger.Logger, failed *int32) outputvalues {
 	transactionsTotal := 0
 	transactionsActive := 0
 	var t *transaction
@@ -80,7 +80,7 @@ func (a *app) innoStatusTransactions(lines []string, log logger.Logger, info *Ru
 		exception.Try(func() {
 			if len(line) > 14 && line[0:14] == "---TRANSACTION" {
 				if t != nil {
-					t.send(a, log, info)
+					t.send(a, log)
 				}
 				transactionsTotal++
 
@@ -132,7 +132,7 @@ func (a *app) innoStatusTransactions(lines []string, log logger.Logger, info *Ru
 		}).Go()
 	}
 	if t != nil {
-		t.send(a, log, info)
+		t.send(a, log)
 	}
 
 	return outputvalues{
@@ -141,7 +141,7 @@ func (a *app) innoStatusTransactions(lines []string, log logger.Logger, info *Ru
 	}
 }
 
-func (a *app) innoStatusBufferpool(global []string, indiv []string, log logger.Logger, info *RunningHostInfo, failed *int32) outputvalues {
+func (a *app) innoStatusBufferpool(global []string, indiv []string, log logger.Logger, failed *int32) outputvalues {
 	data := make(outputvalues)
 	if false {
 		for _, line := range global {
@@ -183,7 +183,7 @@ func (a *app) innoStatusBufferpool(global []string, indiv []string, log logger.L
 				pooldata[strings.Replace(strings.ToLower(matches[1]), " ", "_", -1)] = MustAtoi(matches[2])
 			}
 		}
-		a.send(log, "innodb_pools", tags(info.Tags, map[string]string{
+		a.send(log, "innodb_pools", tags(a.currentHost.Tags, map[string]string{
 			"pool": strconv.Itoa(num),
 		}), pooldata.get())
 	}
@@ -198,7 +198,7 @@ func startsWith(haystack, needle string) bool {
 	return haystack[0:len(needle)] == needle
 }
 
-func (a *app) innoStatus(log logger.Logger, info *RunningHostInfo, failed *int32) {
+func (a *app) innoStatus(log logger.Logger, failed *int32) {
 	defer a.wg.Done()
 	exception.Try(func() {
 		type InnoStatus struct {
@@ -207,7 +207,7 @@ func (a *app) innoStatus(log logger.Logger, info *RunningHostInfo, failed *int32
 			Status string `db:"Status"`
 		}
 		data := &InnoStatus{}
-		err := info.Connection.Get(data, "SHOW ENGINE INNODB STATUS;")
+		err := a.currentHost.Connection.Get(data, "SHOW ENGINE INNODB STATUS;")
 		if err != nil {
 			log.WithData("error", err).Warning("MySQL-Query-Error")
 			atomic.AddInt32(failed, 1)
@@ -240,9 +240,9 @@ func (a *app) innoStatus(log logger.Logger, info *RunningHostInfo, failed *int32
 		}
 
 		values := make(outputvalues)
-		values.merge(a.innoStatusTransactions(blocks["TRANSACTIONS"], log, info, failed))
-		values.merge(a.innoStatusBufferpool(blocks["BUFFER POOL AND MEMORY"], blocks["INDIVIDUAL BUFFER POOL INFO"], log, info, failed))
-		a.send(log, "innodb", info.Tags, values.get())
+		values.merge(a.innoStatusTransactions(blocks["TRANSACTIONS"], log, failed))
+		values.merge(a.innoStatusBufferpool(blocks["BUFFER POOL AND MEMORY"], blocks["INDIVIDUAL BUFFER POOL INFO"], log, failed))
+		a.send(log, "innodb", a.currentHost.Tags, values.get())
 	}).CatchAll(func(i interface{}) {
 		log.Alertf("Exception caught: %#v", i)
 		ok, file, line := exception.GetThrower()
