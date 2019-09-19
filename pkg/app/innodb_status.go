@@ -5,8 +5,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hashicorp/go-multierror"
-
 	"github.com/pkg/errors"
 
 	"github.com/ftloc/exception"
@@ -34,19 +32,23 @@ var (
 	reInnoDbGlobalStatusItem = regexp.MustCompile("^([A-Za-z ]+[a-z]) +([0-9]+)$")
 )
 
-func (t *transaction) sendViaApp(a *App) error {
-	return a.send("transactions", tags(
-		a.currentHost.Tags,
-		map[string]string{
-			"client_host": t.Host,
-			"user":        t.User,
-			"status":      t.Status,
+func (t *transaction) datapoint(tgs map[string]string) datapoint {
+	return datapoint{
+		"transactions",
+		tags(
+			tgs,
+			map[string]string{
+				"client_host": t.Host,
+				"user":        t.User,
+				"status":      t.Status,
+			},
+		),
+		map[string]interface{}{
+			"active":        t.Time,
+			"tables_used":   t.Using,
+			"tables_locked": t.Locked,
 		},
-	), map[string]interface{}{
-		"active":        t.Time,
-		"tables_used":   t.Using,
-		"tables_locked": t.Locked,
-	})
+	}
 }
 
 func MustAtoi(s string) int {
@@ -57,31 +59,28 @@ func MustAtoi(s string) int {
 
 type outputvalues map[string]interface{}
 
-func (ov outputvalues) merge(other outputvalues, err error) error {
+func (ov outputvalues) merge(other outputvalues) {
 	if other != nil {
 		for k, v := range other {
 			ov[k] = v
 		}
 	}
-	return err
 }
 
 func (ov outputvalues) get() map[string]interface{} {
 	return ov
 }
 
-func (a *App) innoStatusTransactions(lines []string) (outputvalues, error) {
+func (a *App) innoStatusTransactions(lines []string) outputvalues {
 	transactionsTotal := 0
 	transactionsActive := 0
 	var t *transaction
 	t = nil
 
-	var errorCollection error
-
 	for _, line := range lines {
 		if len(line) > 14 && line[0:14] == "---TRANSACTION" {
 			if t != nil {
-				errorCollection = multierror.Append(errorCollection, t.sendViaApp(a))
+				a.toSender <- t.datapoint(a.currentHost.Tags)
 			}
 			transactionsTotal++
 
@@ -124,16 +123,16 @@ func (a *App) innoStatusTransactions(lines []string) (outputvalues, error) {
 
 	}
 	if t != nil {
-		errorCollection = multierror.Append(errorCollection, t.sendViaApp(a))
+		a.toSender <- t.datapoint(a.currentHost.Tags)
 	}
 
 	return outputvalues{
 		"transactions_active": transactionsActive,
 		"transactions_total":  transactionsTotal,
-	}, errorCollection
+	}
 }
 
-func (a *App) innoStatusBufferpool(global []string, indiv []string) (outputvalues, error) {
+func (a *App) innoStatusBufferpool(global []string, indiv []string) outputvalues {
 	data := make(outputvalues)
 
 	pools := make(map[int][]string)
@@ -149,7 +148,6 @@ func (a *App) innoStatusBufferpool(global []string, indiv []string) (outputvalue
 		pools[cur] = append(pools[cur], line)
 	}
 
-	var errorCollection error
 	for num, lines := range pools {
 		pooldata := make(outputvalues)
 		for _, line := range lines {
@@ -157,15 +155,16 @@ func (a *App) innoStatusBufferpool(global []string, indiv []string) (outputvalue
 				pooldata[strings.Replace(strings.ToLower(matches[1]), " ", "_", -1)] = MustAtoi(matches[2])
 			}
 		}
-		errorCollection = multierror.Append(
-			errorCollection,
-			a.send("innodb_pools", tags(a.currentHost.Tags, map[string]string{
+		a.toSender <- datapoint{
+			"innodb_pools",
+			tags(a.currentHost.Tags, map[string]string{
 				"pool": strconv.Itoa(num),
-			}), pooldata.get()),
-		)
+			}),
+			pooldata.get(),
+		}
 	}
 
-	return data, errorCollection
+	return data
 }
 
 func startsWith(haystack, needle string) bool {
@@ -213,9 +212,11 @@ func (a *App) innoStatus() error {
 		blocks[block] = append(blocks[block], line)
 	}
 
-	var errorCollection error
 	values := make(outputvalues)
-	errorCollection = multierror.Append(errorCollection, values.merge(a.innoStatusTransactions(blocks["TRANSACTIONS"])))
-	errorCollection = multierror.Append(errorCollection, values.merge(a.innoStatusBufferpool(blocks["BUFFER POOL AND MEMORY"], blocks["INDIVIDUAL BUFFER POOL INFO"])))
-	return multierror.Append(errorCollection, a.send("innodb", a.currentHost.Tags, values.get()))
+	values.merge(a.innoStatusTransactions(blocks["TRANSACTIONS"]))
+	values.merge(a.innoStatusBufferpool(blocks["BUFFER POOL AND MEMORY"], blocks["INDIVIDUAL BUFFER POOL INFO"]))
+
+	a.toSender <- datapoint{"innodb", a.currentHost.Tags, values.get()}
+
+	return nil
 }

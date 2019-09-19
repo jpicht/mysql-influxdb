@@ -27,5 +27,6 @@ func (a *App) globalStatus(filter *regexp.Regexp) error {
 		values[v.Name], _ = strconv.Atoi(v.Value)
 	}
 
-	return a.send("mysql", a.currentHost.Tags, values)
+	a.toSender <- datapoint{"mysql", a.currentHost.Tags, values}
+	return nil
 }

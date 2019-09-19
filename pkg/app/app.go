@@ -41,31 +41,42 @@ type (
 	App struct {
 		now         time.Time
 		wg          *sync.WaitGroup
-		sender      influxsender.InfluxSender
 		currentHost *RunningHostInfo
 		log         logrus.FieldLogger
+
+		toSender chan datapoint
+	}
+	datapoint struct {
+		name   string
+		tags   map[string]string
+		values map[string]interface{}
 	}
 )
 
-func (a *App) send(measurement string, tags map[string]string, values map[string]interface{}) error {
-	p, err := influx.NewPoint(
-		measurement,
-		tags,
-		values,
-		a.now,
-	)
+func (a *App) sender(s influxsender.InfluxSender) {
+	for pt := range a.toSender {
+		p, err := influx.NewPoint(
+			pt.name,
+			pt.tags,
+			pt.values,
+			a.now,
+		)
 
-	if err == nil {
-		a.sender.AddPoint(p)
+		if err != nil {
+			a.log.WithError(err).WithField("point", pt).Warn("lost point")
+			continue
+		}
+
+		s.AddPoint(p)
 	}
-
-	return err
 }
 
 func (a *App) Main() {
 	if len(os.Args) != 2 {
 		fail("Please specify config file")
 	}
+
+	a.log = logrus.StandardLogger()
 
 	c := loadConfigFile(os.Args[1])
 
@@ -76,38 +87,46 @@ func (a *App) Main() {
 	}
 
 	filter, err := regexp.Compile(c.Filter)
-	failOnError(err, "Invalid filter: %s", err)
+	if err != nil {
+		a.log.WithError(err).Fatal("invalid filter")
+	}
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt)
 
 	cons := make([]RunningHostInfo, len(c.Hosts))
-	for i := range c.Hosts {
-		con, err := sqlx.Connect("mysql", c.Hosts[i].DSN)
-		failOnError(err, "Cannot connect to '%s': %s", c.Hosts[i].Name, err)
-		tags := c.Hosts[i].Tags
+	for i, host := range c.Hosts {
+		con, err := sqlx.Connect("mysql", host.DSN)
+		if err != nil {
+			a.log.WithError(err).WithField("server", host.Name).Fatal("cannot connect to host")
+		}
+		tags := host.Tags
 		if tags == nil {
 			tags = make(map[string]string)
 		}
 		if _, ok := tags["host"]; !ok {
-			tags["host"] = c.Hosts[i].Name
+			tags["host"] = host.Name
 		}
 		cons[i] = RunningHostInfo{
-			Name:       c.Hosts[i].Name,
+			Name:       host.Name,
 			Connection: con,
 			Tags:       tags,
 		}
 	}
 
 	s, err := influxsender.NewSender(&c.Influx)
-	failOnError(err, "Error: %s", err)
-	a.sender = s
+	if err != nil {
+		a.log.WithError(err).Fatal()
+	}
 
 	tick := time.NewTicker(interval)
 	sendTick := time.NewTicker(c.Influx.Interval)
-	log := logrus.StandardLogger()
 
 	a.wg = &sync.WaitGroup{}
+	a.toSender = make(chan datapoint, 1000)
+	defer close(a.toSender)
+	go a.sender(s)
+
 	failCount := 0
 	for {
 		select {
@@ -118,7 +137,7 @@ func (a *App) Main() {
 			for i := range cons {
 				a.now = time.Now()
 				a.currentHost = &(cons[i])
-				locallog := log.WithField("server", a.currentHost.Name)
+				locallog := a.log.WithField("server", a.currentHost.Name)
 
 				for _, fn := range []func() error{
 					func() error { return a.globalStatus(filter) },
@@ -137,24 +156,30 @@ func (a *App) Main() {
 
 			if failed > 0 {
 				failCount++
-				log.Warningf("Some items failed (%d/%d items, %d consecutive rounds)", failed, len(cons)*4, failCount)
+				var sleepTime = 2 * time.Second
+
 				if failCount > 10 {
-					time.Sleep(60 * time.Second)
+					sleepTime = 60 * time.Second
 				} else if failCount > 5 {
-					time.Sleep(10 * time.Second)
-				} else {
-					time.Sleep(2 * time.Second)
+					sleepTime = 10 * time.Second
 				}
-			} else {
-				failed = 0
+
+				a.log.WithFields(logrus.Fields{
+					"failed": failed,
+					"round":  failCount,
+				}).Warn("some items failed")
+
+				time.Sleep(sleepTime)
 			}
+			failed = 0
 
 		case <-sendTick.C:
-			go a.sender.Send()
+			go s.Send()
 		case <-signals:
 			tick.Stop()
 			sendTick.Stop()
-			a.sender.Send()
+			a.wg.Wait()
+			s.Send()
 			return
 		}
 	}

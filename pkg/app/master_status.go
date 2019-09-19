@@ -36,7 +36,12 @@ func (a *App) masterStatus() error {
 		return errors.Wrap(err, "cannot parse numeric part of filename")
 	}
 	position := int64(fileNum)*max.BinlogSize + data.Position
-	return a.send("replication", a.currentHost.Tags, map[string]interface{}{
-		"master_position": position,
-	})
+	a.toSender <- datapoint{
+		"replication",
+		a.currentHost.Tags,
+		map[string]interface{}{
+			"master_position": position,
+		},
+	}
+	return nil
 }

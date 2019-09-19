@@ -1,7 +1,6 @@
 package app
 
 import (
-	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
 )
 
@@ -25,28 +24,24 @@ func (a *App) procList() error {
 		return errors.Wrap(err, "cannot select from processlist")
 	}
 
-	var ec error
 	for _, row := range rows {
-		ec = multierror.Append(
-			ec,
-			a.send(
-				"threads",
-				tags(
-					a.currentHost.Tags,
-					map[string]string{
-						"user":    row.User,
-						"command": row.Command,
-						"db":      row.Database,
-						"client":  row.Host,
-						"state":   row.State,
-					},
-				),
-				map[string]interface{}{
-					"threads": row.Count,
+		a.toSender <- datapoint{
+			"threads",
+			tags(
+				a.currentHost.Tags,
+				map[string]string{
+					"user":    row.User,
+					"command": row.Command,
+					"db":      row.Database,
+					"client":  row.Host,
+					"state":   row.State,
 				},
 			),
-		)
+			map[string]interface{}{
+				"threads": row.Count,
+			},
+		}
 	}
 
-	return ec
+	return nil
 }
