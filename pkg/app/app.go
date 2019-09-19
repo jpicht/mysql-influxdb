@@ -33,15 +33,6 @@ type (
 		State    string `db:"STATE"`
 		Count    int    `db:"COUNT"`
 	}
-	EventWaitsHostsLine struct {
-		Host    string  `db:"HOST"`
-		Event   string  `db:"EVENT_NAME"`
-		Count   int64   `db:"COUNT_STAR"`
-		SumWait float64 `db:"SUM_TIMER_WAIT"`
-		MinWait float64 `db:"MIN_TIMER_WAIT"`
-		AvgWait float64 `db:"AVG_TIMER_WAIT"`
-		MaxWait float64 `db:"MAX_TIMER_WAIT"`
-	}
 	RunningHostInfo struct {
 		Name       string
 		Connection *sqlx.DB

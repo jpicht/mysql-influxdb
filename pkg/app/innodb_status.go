@@ -31,7 +31,6 @@ var (
 	reInnoDbTransactionsMySQL       = regexp.MustCompile("^MySQL thread id ([0-9]+), OS thread handle (0x[0-9a-fA-F]+|[0-9]+), query id ([0-9]+) ([^ \t]+) ([a-zA-Z0-9_]+) ?(.*)$")
 	reInnoDbTransactionsStatus      = regexp.MustCompile("([0-9]+) lock struct.s., heap size ([0-9]+), ([0-9]+) row lock.s.(, undo log entries ([0-9]+))?")
 
-	//reInnoDbGlobalStatusItem = regexp.MustCompile("(^|, )([A-Za-z_ ]+[a-z]):? +([0-9]+)(,|$)")
 	reInnoDbGlobalStatusItem = regexp.MustCompile("^([A-Za-z ]+[a-z]) +([0-9]+)$")
 )
 
@@ -98,11 +97,6 @@ func (a *App) innoStatusTransactions(lines []string) (outputvalues, error) {
 						break
 					}
 				}
-				/*if secsStrs[0] == "(PREPARED)" {
-					t.Time = MustAtoi(secsStrs[0])
-				} else {
-					t.Time = MustAtoi(secsStrs[1])
-				}*/
 			}
 		}
 		if matches := reInnoDbTransactionsTableStatus.FindStringSubmatch(line); matches != nil {
@@ -141,26 +135,7 @@ func (a *App) innoStatusTransactions(lines []string) (outputvalues, error) {
 
 func (a *App) innoStatusBufferpool(global []string, indiv []string) (outputvalues, error) {
 	data := make(outputvalues)
-	if false {
-		for _, line := range global {
-			if matches := reInnoDbGlobalStatusItem.FindStringSubmatch(line); matches != nil && len(matches) == 3 {
-				data["bufferpool_"+strings.Replace(strings.ToLower(matches[1]), " ", "_", -1)] = MustAtoi(matches[2])
-			}
-			/*
-				matches := reInnoDbGlobalStatusItem.FindAllStringSubmatch(line, -1)
-				if len(matches) > 0 {
-					log.Infof("LINE: %s", line)
-					for _, match := range matches {
 
-						//data["bufferpool_"+strings.Replace(strings.ToLower(match[2]), " ", "_", -1)] = MustAtoi(match[3])
-						log.Infof("%s: %d", "bufferpool_"+strings.Replace(strings.ToLower(match[2]), " ", "_", -1), MustAtoi(match[3]))
-					}
-				} else {
-					log.Infof("LINE: ERR %s", line)
-				}
-			*/
-		}
-	}
 	pools := make(map[int][]string)
 	cur := -1
 	for _, line := range indiv {
