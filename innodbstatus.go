@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/ftloc/exception"
 	"github.com/jpicht/logger"
@@ -37,8 +36,8 @@ var (
 	reInnoDbGlobalStatusItem = regexp.MustCompile("^([A-Za-z ]+[a-z]) +([0-9]+)$")
 )
 
-func (t *transaction) send(a*app, log logger.Logger, now time.Time, sender influxsender.InfluxSender, info *RunningHostInfo) {
-	a.send(log, now, sender, "transactions", tags(
+func (t *transaction) send(a *app, log logger.Logger, sender influxsender.InfluxSender, info *RunningHostInfo) {
+	a.send(log, sender, "transactions", tags(
 		info.Tags,
 		map[string]string{
 			"client_host": t.Host,
@@ -73,7 +72,7 @@ func (ov outputvalues) get() map[string]interface{} {
 	return ov
 }
 
-func  (a*app) innoStatusTransactions(lines []string, now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) outputvalues {
+func (a *app) innoStatusTransactions(lines []string, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) outputvalues {
 	transactionsTotal := 0
 	transactionsActive := 0
 	var t *transaction
@@ -83,7 +82,7 @@ func  (a*app) innoStatusTransactions(lines []string, now time.Time, wg *sync.Wai
 		exception.Try(func() {
 			if len(line) > 14 && line[0:14] == "---TRANSACTION" {
 				if t != nil {
-					t.send(a, log, now, sender, info)
+					t.send(a, log, sender, info)
 				}
 				transactionsTotal++
 
@@ -135,7 +134,7 @@ func  (a*app) innoStatusTransactions(lines []string, now time.Time, wg *sync.Wai
 		}).Go()
 	}
 	if t != nil {
-		t.send(a, log, now, sender, info)
+		t.send(a, log, sender, info)
 	}
 
 	return outputvalues{
@@ -144,7 +143,7 @@ func  (a*app) innoStatusTransactions(lines []string, now time.Time, wg *sync.Wai
 	}
 }
 
-func (a*app)  innoStatusBufferpool(global []string, indiv []string, now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) outputvalues {
+func (a *app) innoStatusBufferpool(global []string, indiv []string, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) outputvalues {
 	data := make(outputvalues)
 	if false {
 		for _, line := range global {
@@ -186,7 +185,7 @@ func (a*app)  innoStatusBufferpool(global []string, indiv []string, now time.Tim
 				pooldata[strings.Replace(strings.ToLower(matches[1]), " ", "_", -1)] = MustAtoi(matches[2])
 			}
 		}
-		a.send(log, now, sender, "innodb_pools", tags(info.Tags, map[string]string{
+		a.send(log, sender, "innodb_pools", tags(info.Tags, map[string]string{
 			"pool": strconv.Itoa(num),
 		}), pooldata.get())
 	}
@@ -201,7 +200,7 @@ func startsWith(haystack, needle string) bool {
 	return haystack[0:len(needle)] == needle
 }
 
-func (a*app)  innoStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
+func (a *app) innoStatus(wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
 	defer wg.Done()
 	exception.Try(func() {
 		type InnoStatus struct {
@@ -243,9 +242,9 @@ func (a*app)  innoStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, i
 		}
 
 		values := make(outputvalues)
-		values.merge(a.innoStatusTransactions(blocks["TRANSACTIONS"], now, wg, log, info, sender, failed))
-		values.merge(a.innoStatusBufferpool(blocks["BUFFER POOL AND MEMORY"], blocks["INDIVIDUAL BUFFER POOL INFO"], now, wg, log, info, sender, failed))
-		a.send(log, now, sender, "innodb", info.Tags, values.get())
+		values.merge(a.innoStatusTransactions(blocks["TRANSACTIONS"], wg, log, info, sender, failed))
+		values.merge(a.innoStatusBufferpool(blocks["BUFFER POOL AND MEMORY"], blocks["INDIVIDUAL BUFFER POOL INFO"], wg, log, info, sender, failed))
+		a.send(log, sender, "innodb", info.Tags, values.get())
 	}).CatchAll(func(i interface{}) {
 		log.Alertf("Exception caught: %#v", i)
 		ok, file, line := exception.GetThrower()

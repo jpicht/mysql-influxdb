@@ -7,14 +7,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/ftloc/exception"
 	"github.com/jpicht/logger"
 	"github.com/jpicht/mysql-influxdb/influxsender"
 )
 
-func (a*app)  masterStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
+func (a *app) masterStatus(wg *sync.WaitGroup, log logger.Logger, info *RunningHostInfo, sender influxsender.InfluxSender, failed *int32) {
 	defer wg.Done()
 	exception.Try(func() {
 		type helper struct {
@@ -47,7 +46,7 @@ func (a*app)  masterStatus(now time.Time, wg *sync.WaitGroup, log logger.Logger,
 			return
 		}
 		position := int64(fileNum)*max.BinlogSize + data.Position
-		a.send(log, now, sender, "replication", info.Tags, map[string]interface{}{
+		a.send(log, sender, "replication", info.Tags, map[string]interface{}{
 			"master_position": position,
 		})
 	}).CatchAll(func(i interface{}) {
