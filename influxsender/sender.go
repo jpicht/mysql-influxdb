@@ -1,9 +1,9 @@
 package influxsender
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
-	"encoding/json"
 
 	"github.com/ftloc/exception"
 	influx "github.com/influxdata/influxdb/client/v2"
