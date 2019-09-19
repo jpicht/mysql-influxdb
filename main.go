@@ -38,6 +38,7 @@ type (
 		Value string `db:"Value"`
 	}
 	ProcesslistAbbrevLine struct {
+		User     string `db:"USER"`
 		Command  string `db:"COMMAND"`
 		Database string `db:"DB"`
 		Host     string `db:"REMOTE"`
@@ -77,11 +78,12 @@ func failOnError(err error, f string, data ...interface{}) {
 	os.Exit(1)
 }
 
-func newTmpPointProcList(tags map[string]string, command string, db string, host string, state string) *TmpPoint {
+func newTmpPointProcList(tags map[string]string, user string, command string, db string, host string, state string) *TmpPoint {
 	copy := make(map[string]string)
 	for k, v := range tags {
 		copy[k] = v
 	}
+	copy["user"] = user
 	copy["command"] = command
 	copy["db"] = db
 	copy["client"] = host
@@ -178,6 +180,7 @@ func procList(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *Runnin
 		err := info.Connection.Select(
 			&rows,
 			"SELECT "+
+				"IFNULL(USER, '') USER, "+
 				"IFNULL(COMMAND, '') COMMAND, "+
 				"IFNULL(DB, '') DB, "+
 				"SUBSTRING_INDEX(HOST, ':', 1) AS REMOTE, "+
@@ -200,9 +203,9 @@ func procList(now time.Time, wg *sync.WaitGroup, log logger.Logger, info *Runnin
 				state = row.Command
 			}
 
-			key := row.Command + row.Database + row.Host + row.State
+			key := row.User + row.Command + row.Database + row.Host + row.State
 			if _, ok := tmp[key]; !ok {
-				tmp[key] = newTmpPointProcList(info.Tags, row.Command, row.Database, row.Host, state)
+				tmp[key] = newTmpPointProcList(info.Tags, row.User, row.Command, row.Database, row.Host, state)
 			}
 
 			tmp[key].values["threads"] = row.Count
