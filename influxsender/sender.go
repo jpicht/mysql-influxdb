@@ -3,10 +3,10 @@ package influxsender
 import (
 	"sync"
 	"time"
+	"encoding/json"
 
 	"github.com/ftloc/exception"
 	influx "github.com/influxdata/influxdb/client/v2"
-	"github.com/mitchellh/packer/common/json"
 	"github.com/pkg/errors"
 )
 
