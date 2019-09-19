@@ -59,10 +59,6 @@ type (
 		Connection *sqlx.DB
 		Tags       map[string]string
 	}
-	TmpPoint struct {
-		tags   map[string]string
-		values map[string]interface{}
-	}
 	app struct {
 		now         time.Time
 		wg          *sync.WaitGroup
@@ -82,22 +78,6 @@ func failOnError(err error, f string, data ...interface{}) {
 	}
 	fmt.Fprintf(os.Stderr, f+"\n", data...)
 	os.Exit(1)
-}
-
-func newTmpPointProcList(tags map[string]string, user string, command string, db string, host string, state string) *TmpPoint {
-	copy := make(map[string]string)
-	for k, v := range tags {
-		copy[k] = v
-	}
-	copy["user"] = user
-	copy["command"] = command
-	copy["db"] = db
-	copy["client"] = host
-	copy["state"] = state
-	return &TmpPoint{
-		tags:   copy,
-		values: make(map[string]interface{}),
-	}
 }
 
 func (c *Config) UnmarshalJSON(data []byte) error {
