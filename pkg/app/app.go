@@ -30,10 +30,18 @@ type (
 		Tags       map[string]string
 	}
 	App struct {
-		now         time.Time
-		wg          *sync.WaitGroup
+		now time.Time
+		wg  *sync.WaitGroup
+		log logrus.FieldLogger
+
+		c      *Config
+		filter *regexp.Regexp
+
+		ctx         context.Context
+		cancel      context.CancelFunc
+		cons        []RunningHostInfo
+		failCount   int
 		currentHost *RunningHostInfo
-		log         logrus.FieldLogger
 
 		toSender chan *datasource.DataPoint
 	}
@@ -52,8 +60,8 @@ func (a *App) sender(s influxsender.InfluxSender) {
 	}
 }
 
-func (a *App) Main() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (a *App) init() {
+	a.ctx, a.cancel = context.WithCancel(context.Background())
 	if len(os.Args) != 2 {
 		fail("Please specify config file")
 	}
@@ -61,18 +69,7 @@ func (a *App) Main() {
 	logrus.StandardLogger().Level = logrus.DebugLevel
 	a.log = logrus.StandardLogger()
 
-	c := loadConfigFile(os.Args[1])
-
-	var interval = c.Interval
-
-	if interval < 1*time.Second {
-		interval = 1 * time.Second
-	}
-
-	filter, err := regexp.Compile(c.Filter)
-	if err != nil {
-		a.log.WithError(err).Fatal("invalid filter")
-	}
+	a.c = loadConfigFile(os.Args[1])
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt)
@@ -80,7 +77,7 @@ func (a *App) Main() {
 		first := true
 		for range signals {
 			if first {
-				cancel()
+				a.cancel()
 				first = false
 			} else {
 				buf := make([]byte, 1<<16)
@@ -90,9 +87,11 @@ func (a *App) Main() {
 			}
 		}
 	}()
+}
 
-	cons := make([]RunningHostInfo, len(c.Hosts))
-	for i, host := range c.Hosts {
+func (a *App) connect() {
+	a.cons = make([]RunningHostInfo, len(a.c.Hosts))
+	for i, host := range a.c.Hosts {
 		a.log.Debug(host)
 		con, err := sqlx.Connect("mysql", host.DSN)
 		if err != nil {
@@ -105,109 +104,121 @@ func (a *App) Main() {
 		if _, ok := tags["host"]; !ok {
 			tags["host"] = host.Name
 		}
-		cons[i] = RunningHostInfo{
+		a.cons[i] = RunningHostInfo{
 			Name:       host.Name,
 			Connection: con,
 			Tags:       tags,
 		}
 	}
+}
 
-	s, err := influxsender.NewSender(&c.Influx)
+func (a *App) Main() {
+	a.init()
+	a.connect()
+	s, err := influxsender.NewSender(&(a.c.Influx))
 	if err != nil {
 		a.log.WithError(err).Fatal()
 	}
 
-	tick := time.NewTicker(interval)
-	sendTick := time.NewTicker(c.Influx.Interval)
+	tick := time.NewTicker(a.c.Interval)
+	sendTick := time.NewTicker(a.c.Influx.Interval)
 
 	a.wg = &sync.WaitGroup{}
 	a.toSender = make(chan *datasource.DataPoint, 1000)
 	defer close(a.toSender)
 	go a.sender(s)
 
-	failCount := 0
 	for {
 		select {
 		case <-tick.C:
-			a.log.Debug("tick")
-			failed := int32(0)
-			a.wg.Add(4 * len(cons))
-
-			for i := range cons {
-				if ctx.Err() != nil {
-					break
-				}
-
-				a.now = time.Now()
-				a.currentHost = &(cons[i])
-				serverLog := a.log.WithField("server", a.currentHost.Name)
-
-				type dataSource interface {
-					Run() error
-					Close()
-					C() <-chan *datasource.DataPoint
-				}
-				dsWrapper := func(ds dataSource) func() error {
-					return func() error {
-						defer ds.Close()
-						defer a.wg.Done()
-						go func() {
-							for p := range ds.C() {
-								p.AddTagsIfNotExist(a.currentHost.Tags)
-								a.toSender <- p
-							}
-						}()
-						return ds.Run()
-					}
-				}
-
-				for n, fn := range map[string]func() error{
-					"global":        dsWrapper(datasource.NewGlobalStatus(a.currentHost.Connection, filter)),
-					"process list":  dsWrapper(datasource.NewProcessList(a.currentHost.Connection)),
-					"innodb":        dsWrapper(datasource.NewInnoDB(a.currentHost.Connection)),
-					"master status": dsWrapper(datasource.NewMasterStatus(a.currentHost.Connection)),
-				} {
-					localLog := serverLog.WithField("fn", n)
-					localLog.Debug("tick")
-					if err := fn(); err != nil {
-						localLog.WithError(err).Warn()
-						failed++
-					}
-				}
-			}
-			// synchronous at the moment, but whatever
-			a.wg.Wait()
-
-			if failed > 0 {
-				failCount++
-				var sleepTime = 2 * time.Second
-
-				if failCount > 10 {
-					sleepTime = 60 * time.Second
-				} else if failCount > 5 {
-					sleepTime = 10 * time.Second
-				}
-
-				a.log.WithFields(logrus.Fields{
-					"failed": failed,
-					"round":  failCount,
-				}).Warn("some items failed")
-
-				if ctx.Err() == nil {
-					time.Sleep(sleepTime)
-				}
-			}
-			failed = 0
+			a.tick()
 
 		case <-sendTick.C:
 			go s.Send()
-		case <-ctx.Done():
+
+		case <-a.ctx.Done():
 			a.log.Info("Quitting")
 			tick.Stop()
 			sendTick.Stop()
+			a.log.Info("Waiting for workers")
 			a.wg.Wait()
+			a.log.Info("Pushing data")
 			s.Send()
 			return
 		}
+	}
+}
+
+func (a *App) tick() {
+	a.log.Debug("tick")
+	failed := 0
+
+	a.wg.Add(4 * len(a.cons))
+
+	for i := range a.cons {
+		if a.ctx.Err() != nil {
+			break
+		}
+
+		a.now = time.Now()
+		a.currentHost = &(a.cons[i])
+		serverLog := a.log.WithField("server", a.currentHost.Name)
+
+		type dataSource interface {
+			Run() error
+			Close()
+			C() <-chan *datasource.DataPoint
+		}
+		dsWrapper := func(ds dataSource) func() error {
+			return func() error {
+				defer ds.Close()
+				defer a.wg.Done()
+				go func() {
+					for p := range ds.C() {
+						p.AddTagsIfNotExist(a.currentHost.Tags)
+						a.toSender <- p
+					}
+				}()
+				return ds.Run()
+			}
+		}
+
+		for n, fn := range map[string]func() error{
+			"global":        dsWrapper(datasource.NewGlobalStatus(a.currentHost.Connection, a.c.filter)),
+			"process list":  dsWrapper(datasource.NewProcessList(a.currentHost.Connection)),
+			"innodb":        dsWrapper(datasource.NewInnoDB(a.currentHost.Connection)),
+			"master status": dsWrapper(datasource.NewMasterStatus(a.currentHost.Connection)),
+		} {
+			localLog := serverLog.WithField("fn", n)
+			localLog.Debug("tick")
+			if err := fn(); err != nil {
+				localLog.WithError(err).Warn()
+				failed++
+			}
+		}
+	}
+	// synchronous at the moment, but whatever
+	a.wg.Wait()
+
+	if failed > 0 {
+		a.failCount++
+		var sleepTime = 2 * time.Second
+
+		if a.failCount > 10 {
+			sleepTime = 60 * time.Second
+		} else if a.failCount > 5 {
+			sleepTime = 10 * time.Second
+		}
+
+		a.log.WithFields(logrus.Fields{
+			"failed": failed,
+			"round":  a.failCount,
+		}).Warn("some items failed")
+
+		if a.ctx.Err() == nil {
+			time.Sleep(sleepTime)
+		}
+	} else {
+		a.failCount = 0
 	}
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"io/ioutil"
+	"regexp"
 	"time"
 
 	"github.com/jpicht/mysql-influxdb/influxsender"
@@ -14,15 +15,27 @@ type (
 		Filter   string
 		Influx   influxsender.Config
 		Hosts    []Host
+
+		filter *regexp.Regexp
 	}
 )
 
 func loadConfigFile(fn string) *Config {
 	c := &Config{}
+
 	d, err := ioutil.ReadFile(fn)
 	failOnError(err, "Cannot read config file: %s", err)
+
 	err = json.Unmarshal(d, c)
 	failOnError(err, "Cannot parse config file: %s", err)
+
+	c.filter, err = regexp.Compile(c.Filter)
+	failOnError(err, "invalid filter regex: %s", err)
+
+	if c.Interval < 1*time.Second {
+		c.Interval = 1 * time.Second
+	}
+
 	return c
 }
 
