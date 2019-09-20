@@ -143,9 +143,13 @@ func (a *App) Main() {
 				a.currentHost = &(cons[i])
 				serverLog := a.log.WithField("server", a.currentHost.Name)
 
-				for n, fn := range map[string]func() error{
-					"global": func() error {
-						ds := datasource.NewGlobalStatus(a.currentHost.Connection, filter)
+				type dataSource interface {
+					Run() error
+					Close()
+					C() <-chan *datasource.DataPoint
+				}
+				dsWrapper := func(ds dataSource) func() error {
+					return func() error {
 						defer ds.Close()
 						go func() {
 							for p := range ds.C() {
@@ -154,10 +158,14 @@ func (a *App) Main() {
 							}
 						}()
 						return ds.Run()
-					},
+					}
+				}
+
+				for n, fn := range map[string]func() error{
+					"global":        dsWrapper(datasource.NewGlobalStatus(a.currentHost.Connection, filter)),
 					"process list":  a.procList,
 					"innodb":        a.innoStatus,
-					"master status": a.masterStatus,
+					"master status": dsWrapper(datasource.NewMasterStatus(a.currentHost.Connection)),
 				} {
 					localLog := serverLog.WithField("fn", n)
 					localLog.Debug("tick")
