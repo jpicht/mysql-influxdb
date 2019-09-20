@@ -1,4 +1,6 @@
 .idea
 *.swp
 /mysql-influxdb
+/mysql-telegraf-src
 *.rpm
+*.json
