@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jpicht/mysql-influxdb/pkg/datasource"
+
 	"github.com/pkg/errors"
 )
 
@@ -36,12 +38,12 @@ func (a *App) masterStatus() error {
 		return errors.Wrap(err, "cannot parse numeric part of filename")
 	}
 	position := int64(fileNum)*max.BinlogSize + data.Position
-	a.toSender <- datapoint{
+	a.toSender <- datasource.NewDataPoint(
 		"replication",
 		a.currentHost.Tags,
 		map[string]interface{}{
 			"master_position": position,
 		},
-	}
+	)
 	return nil
 }

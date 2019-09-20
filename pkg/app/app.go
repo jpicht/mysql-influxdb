@@ -1,18 +1,19 @@
 package app
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"regexp"
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	"github.com/jpicht/mysql-influxdb/influxsender"
+	"github.com/jpicht/mysql-influxdb/pkg/datasource"
 
 	_ "github.com/go-sql-driver/mysql"
-	influx "github.com/influxdata/influxdb/client/v2"
 	"github.com/jmoiron/sqlx"
-	"github.com/jpicht/mysql-influxdb/influxsender"
+	"github.com/sirupsen/logrus"
 )
 
 type (
@@ -21,10 +22,7 @@ type (
 		DSN  string
 		Tags map[string]string
 	}
-	Line struct {
-		Name  string `db:"Variable_name"`
-		Value string `db:"Value"`
-	}
+
 	ProcesslistAbbrevLine struct {
 		User     string `db:"USER"`
 		Command  string `db:"COMMAND"`
@@ -44,23 +42,14 @@ type (
 		currentHost *RunningHostInfo
 		log         logrus.FieldLogger
 
-		toSender chan datapoint
-	}
-	datapoint struct {
-		name   string
-		tags   map[string]string
-		values map[string]interface{}
+		toSender chan *datasource.DataPoint
 	}
 )
 
 func (a *App) sender(s influxsender.InfluxSender) {
 	for pt := range a.toSender {
-		p, err := influx.NewPoint(
-			pt.name,
-			pt.tags,
-			pt.values,
-			a.now,
-		)
+		a.log.WithField("pt", pt).Info()
+		p, err := pt.InfluxPoint(a.now)
 
 		if err != nil {
 			a.log.WithError(err).WithField("point", pt).Warn("lost point")
@@ -72,10 +61,12 @@ func (a *App) sender(s influxsender.InfluxSender) {
 }
 
 func (a *App) Main() {
+	ctx, cancel := context.WithCancel(context.Background())
 	if len(os.Args) != 2 {
 		fail("Please specify config file")
 	}
 
+	logrus.StandardLogger().Level = logrus.DebugLevel
 	a.log = logrus.StandardLogger()
 
 	c := loadConfigFile(os.Args[1])
@@ -93,9 +84,21 @@ func (a *App) Main() {
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt)
+	go func() {
+		first := true
+		for range signals {
+			if first {
+				cancel()
+				first = false
+			} else {
+				os.Exit(9)
+			}
+		}
+	}()
 
 	cons := make([]RunningHostInfo, len(c.Hosts))
 	for i, host := range c.Hosts {
+		a.log.Debug(host)
 		con, err := sqlx.Connect("mysql", host.DSN)
 		if err != nil {
 			a.log.WithError(err).WithField("server", host.Name).Fatal("cannot connect to host")
@@ -123,7 +126,7 @@ func (a *App) Main() {
 	sendTick := time.NewTicker(c.Influx.Interval)
 
 	a.wg = &sync.WaitGroup{}
-	a.toSender = make(chan datapoint, 1000)
+	a.toSender = make(chan *datasource.DataPoint, 1000)
 	defer close(a.toSender)
 	go a.sender(s)
 
@@ -131,22 +134,35 @@ func (a *App) Main() {
 	for {
 		select {
 		case <-tick.C:
+			a.log.Debug("tick")
 			failed := int32(0)
 			a.wg.Add(4 * len(cons))
 
 			for i := range cons {
 				a.now = time.Now()
 				a.currentHost = &(cons[i])
-				locallog := a.log.WithField("server", a.currentHost.Name)
+				serverLog := a.log.WithField("server", a.currentHost.Name)
 
-				for _, fn := range []func() error{
-					func() error { return a.globalStatus(filter) },
-					a.procList,
-					a.innoStatus,
-					a.masterStatus,
+				for n, fn := range map[string]func() error{
+					"global": func() error {
+						ds := datasource.NewGlobalStatus(a.currentHost.Connection, filter)
+						defer ds.Close()
+						go func() {
+							for p := range ds.C() {
+								p.AddTagsIfNotExist(a.currentHost.Tags)
+								a.toSender <- p
+							}
+						}()
+						return ds.Run()
+					},
+					"process list":  a.procList,
+					"innodb":        a.innoStatus,
+					"master status": a.masterStatus,
 				} {
+					localLog := serverLog.WithField("fn", n)
+					localLog.Debug("tick")
 					if err := fn(); err != nil {
-						locallog.WithError(err).Warn()
+						localLog.WithError(err).Warn()
 						failed++
 					}
 				}
@@ -175,7 +191,7 @@ func (a *App) Main() {
 
 		case <-sendTick.C:
 			go s.Send()
-		case <-signals:
+		case <-ctx.Done():
 			tick.Stop()
 			sendTick.Stop()
 			a.wg.Wait()

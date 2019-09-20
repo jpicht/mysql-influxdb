@@ -5,9 +5,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pkg/errors"
+	"github.com/jpicht/mysql-influxdb/pkg/datasource"
 
 	"github.com/ftloc/exception"
+	"github.com/pkg/errors"
 )
 
 type transaction struct {
@@ -32,8 +33,8 @@ var (
 	reInnoDbGlobalStatusItem = regexp.MustCompile("^([A-Za-z ]+[a-z]) +([0-9]+)$")
 )
 
-func (t *transaction) datapoint(tgs map[string]string) datapoint {
-	return datapoint{
+func (t *transaction) datapoint(tgs map[string]string) *datasource.DataPoint {
+	return datasource.NewDataPoint(
 		"transactions",
 		tags(
 			tgs,
@@ -48,7 +49,7 @@ func (t *transaction) datapoint(tgs map[string]string) datapoint {
 			"tables_used":   t.Using,
 			"tables_locked": t.Locked,
 		},
-	}
+	)
 }
 
 func MustAtoi(s string) int {
@@ -155,13 +156,13 @@ func (a *App) innoStatusBufferpool(global []string, indiv []string) outputvalues
 				pooldata[strings.Replace(strings.ToLower(matches[1]), " ", "_", -1)] = MustAtoi(matches[2])
 			}
 		}
-		a.toSender <- datapoint{
+		a.toSender <- datasource.NewDataPoint(
 			"innodb_pools",
 			tags(a.currentHost.Tags, map[string]string{
 				"pool": strconv.Itoa(num),
 			}),
 			pooldata.get(),
-		}
+		)
 	}
 
 	return data
@@ -216,7 +217,7 @@ func (a *App) innoStatus() error {
 	values.merge(a.innoStatusTransactions(blocks["TRANSACTIONS"]))
 	values.merge(a.innoStatusBufferpool(blocks["BUFFER POOL AND MEMORY"], blocks["INDIVIDUAL BUFFER POOL INFO"]))
 
-	a.toSender <- datapoint{"innodb", a.currentHost.Tags, values.get()}
+	a.toSender <- datasource.NewDataPoint("innodb", a.currentHost.Tags, values.get())
 
 	return nil
 }

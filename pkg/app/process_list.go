@@ -1,6 +1,8 @@
 package app
 
 import (
+	"github.com/jpicht/mysql-influxdb/pkg/datasource"
+
 	"github.com/pkg/errors"
 )
 
@@ -25,7 +27,7 @@ func (a *App) procList() error {
 	}
 
 	for _, row := range rows {
-		a.toSender <- datapoint{
+		a.toSender <- datasource.NewDataPoint(
 			"threads",
 			tags(
 				a.currentHost.Tags,
@@ -40,7 +42,7 @@ func (a *App) procList() error {
 			map[string]interface{}{
 				"threads": row.Count,
 			},
-		}
+		)
 	}
 
 	return nil
