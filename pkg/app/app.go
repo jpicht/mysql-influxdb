@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime"
 	"sync"
 	"time"
 
@@ -21,15 +23,6 @@ type (
 		Name string
 		DSN  string
 		Tags map[string]string
-	}
-
-	ProcesslistAbbrevLine struct {
-		User     string `db:"USER"`
-		Command  string `db:"COMMAND"`
-		Database string `db:"DB"`
-		Host     string `db:"REMOTE"`
-		State    string `db:"STATE"`
-		Count    int    `db:"COUNT"`
 	}
 	RunningHostInfo struct {
 		Name       string
@@ -48,7 +41,6 @@ type (
 
 func (a *App) sender(s influxsender.InfluxSender) {
 	for pt := range a.toSender {
-		a.log.WithField("pt", pt).Info()
 		p, err := pt.InfluxPoint(a.now)
 
 		if err != nil {
@@ -91,6 +83,9 @@ func (a *App) Main() {
 				cancel()
 				first = false
 			} else {
+				buf := make([]byte, 1<<16)
+				runtime.Stack(buf, true)
+				fmt.Printf("%s", buf)
 				os.Exit(9)
 			}
 		}
@@ -139,6 +134,10 @@ func (a *App) Main() {
 			a.wg.Add(4 * len(cons))
 
 			for i := range cons {
+				if ctx.Err() != nil {
+					break
+				}
+
 				a.now = time.Now()
 				a.currentHost = &(cons[i])
 				serverLog := a.log.WithField("server", a.currentHost.Name)
@@ -151,6 +150,7 @@ func (a *App) Main() {
 				dsWrapper := func(ds dataSource) func() error {
 					return func() error {
 						defer ds.Close()
+						defer a.wg.Done()
 						go func() {
 							for p := range ds.C() {
 								p.AddTagsIfNotExist(a.currentHost.Tags)
@@ -163,8 +163,8 @@ func (a *App) Main() {
 
 				for n, fn := range map[string]func() error{
 					"global":        dsWrapper(datasource.NewGlobalStatus(a.currentHost.Connection, filter)),
-					"process list":  a.procList,
-					"innodb":        a.innoStatus,
+					"process list":  dsWrapper(datasource.NewProcessList(a.currentHost.Connection)),
+					"innodb":        dsWrapper(datasource.NewInnoDB(a.currentHost.Connection)),
 					"master status": dsWrapper(datasource.NewMasterStatus(a.currentHost.Connection)),
 				} {
 					localLog := serverLog.WithField("fn", n)
@@ -193,13 +193,16 @@ func (a *App) Main() {
 					"round":  failCount,
 				}).Warn("some items failed")
 
-				time.Sleep(sleepTime)
+				if ctx.Err() == nil {
+					time.Sleep(sleepTime)
+				}
 			}
 			failed = 0
 
 		case <-sendTick.C:
 			go s.Send()
 		case <-ctx.Done():
+			a.log.Info("Quitting")
 			tick.Stop()
 			sendTick.Stop()
 			a.wg.Wait()
