@@ -10,7 +10,7 @@ import (
 
 type (
 	MasterStatus struct {
-		DataSource
+		BaseDataSource
 	}
 )
 

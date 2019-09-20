@@ -1,9 +1,12 @@
 package datasource
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/sirupsen/logrus"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/pkg/errors"
@@ -11,21 +14,21 @@ import (
 
 type (
 	InnoDB struct {
-		DataSource
+		BaseDataSource
 		outputValues map[string]interface{}
 	}
 )
 
 func NewInnoDB(db *sqlx.DB) *InnoDB {
 	return &InnoDB{
-		DataSource:   *New(db),
-		outputValues: make(map[string]interface{}),
+		BaseDataSource: *New(db),
+		outputValues:   make(map[string]interface{}),
 	}
 }
 
 var (
 	reInnoDbTransactionsTableStatus = regexp.MustCompile("^mysql tables in use ([0-9]+), locked ([0-9]+)")
-	reInnoDbTransactionsMySQL       = regexp.MustCompile("^MySQL thread id ([0-9]+), OS thread handle (0x[0-9a-fA-F]+|[0-9]+), query id ([0-9]+) ([^ \t]+) ([a-zA-Z0-9_]+) ?(.*)$")
+	reInnoDbTransactionsMySQL       = regexp.MustCompile("^MySQL thread id ([0-9]+), OS thread handle (0x[0-9a-fA-F]+|[0-9]+), query id ([0-9]+) +([^ \t]+) ([a-zA-Z0-9_]+) ?(.*)$")
 	reInnoDbTransactionsStatus      = regexp.MustCompile("([0-9]+) lock struct.s., heap size ([0-9]+), ([0-9]+) row lock.s.(, undo log entries ([0-9]+))?")
 
 	reInnoDbGlobalStatusItem = regexp.MustCompile("^([A-Za-z ]+[a-z]) +([0-9]+)$")
@@ -97,6 +100,7 @@ func (t *transaction) dataPoint() *DataPoint {
 			"client_host": t.Host,
 			"user":        t.User,
 			"status":      t.Status,
+			"is_active":   fmt.Sprintf("%#v", t.Active),
 		},
 		map[string]interface{}{
 			"active":        t.Time,
@@ -112,6 +116,9 @@ func (i *InnoDB) transactions(lines []string) {
 	var t *transaction
 	t = nil
 
+	userTransactions := map[string]int{}
+	activeUserTransactions := map[string]int{}
+
 	for _, line := range lines {
 		if len(line) > 14 && line[0:14] == "---TRANSACTION" {
 			if t != nil {
@@ -122,28 +129,49 @@ func (i *InnoDB) transactions(lines []string) {
 			t = &transaction{
 				Active: strings.Contains(line, " ACTIVE "),
 			}
-			if t.Active {
-				transactionsActive++
-				secsStrs := strings.Split(strings.Split(line, " ACTIVE ")[1], " ")
-				for i, s := range secsStrs[1:] {
-					if len(s) >= 3 && strings.ToLower(s[0:3]) == "sec" {
-						t.Time, _ = strconv.Atoi(secsStrs[i])
-						break
-					}
+			if !t.Active {
+				continue
+			}
+			transactionsActive++
+			secsStrs := strings.Split(strings.Split(line, " ACTIVE ")[1], " ")
+			for i, s := range secsStrs[1:] {
+				if len(s) >= 3 && strings.ToLower(s[0:3]) == "sec" {
+					t.Time, _ = strconv.Atoi(secsStrs[i])
+					break
 				}
 			}
 		}
-		if matches := reInnoDbTransactionsTableStatus.FindStringSubmatch(line); matches != nil {
+
+		log := logrus.WithField("line", line)
+
+		if strings.HasPrefix(line, "mysql tables in use") {
+			matches := reInnoDbTransactionsTableStatus.FindStringSubmatch(line)
+			if matches == nil {
+				log.WithField("re", reInnoDbTransactionsTableStatus).Fatal()
+			}
 			t.Using, _ = strconv.Atoi(matches[1])
 			t.Locked, _ = strconv.Atoi(matches[2])
-		} else if matches := reInnoDbTransactionsMySQL.FindStringSubmatch(line); matches != nil {
+		} else if strings.HasPrefix(line, "MySQL thread id") {
+			matches := reInnoDbTransactionsMySQL.FindStringSubmatch(line)
+			if matches == nil {
+				if strings.Contains(line, "relay log") {
+					continue
+				}
+				log.WithField("re", reInnoDbTransactionsMySQL).Fatal()
+			}
 			t.Host = matches[4]
 			t.User = matches[5]
 			t.Status = matches[6]
+
+			userTransactions[t.User]++
+			if t.Active {
+				activeUserTransactions[t.User]++
+			}
 		} else if strings.Contains(line, " lock struct") {
 			matches := reInnoDbTransactionsStatus.FindStringSubmatch(line)
+
 			if matches == nil {
-				//a.log.WithField("line", line).Info("could not parse line")
+				log.WithField("re", reInnoDbTransactionsStatus).Fatal("could not parse line")
 				continue
 			}
 
@@ -157,8 +185,18 @@ func (i *InnoDB) transactions(lines []string) {
 		}
 
 	}
-	if t != nil {
-		i.sink <- t.dataPoint()
+
+	for user, numTransactions := range userTransactions {
+		i.sink <- &DataPoint{
+			"user_transactions",
+			map[string]string{
+				"user": user,
+			},
+			map[string]interface{}{
+				"transactions_count":  numTransactions,
+				"transactions_active": activeUserTransactions[user],
+			},
+		}
 	}
 
 	i.outputValues["transactions_active"] = transactionsActive

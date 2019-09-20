@@ -15,7 +15,7 @@ type (
 		Value string `db:"Value"`
 	}
 	GlobalStatus struct {
-		DataSource
+		BaseDataSource
 
 		Filter *regexp.Regexp
 	}
@@ -23,8 +23,8 @@ type (
 
 func NewGlobalStatus(db *sqlx.DB, filter *regexp.Regexp) *GlobalStatus {
 	return &GlobalStatus{
-		DataSource: *New(db),
-		Filter:     filter,
+		BaseDataSource: *New(db),
+		Filter:         filter,
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 
 type (
 	ProcessList struct {
-		DataSource
+		BaseDataSource
 	}
 	processlistAbbrevLine struct {
 		User     string `db:"USER"`
