@@ -58,6 +58,7 @@ func main() {
 				go func() {
 					defer wg.Done()
 					for pt := range ds.C() {
+						pt.AddTagsIfNotExist(host.Tags)
 						pt.AddTagsIfNotExist(baseTags)
 
 						p, err := pt.InfluxPoint(now)

@@ -16,6 +16,7 @@ type (
 	Host struct {
 		Name string
 		DSN  string
+		Tags map[string]string
 	}
 )
 
